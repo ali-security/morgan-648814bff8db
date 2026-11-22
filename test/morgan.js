@@ -82,6 +82,30 @@ describe('morgan()', function () {
           .expect(200, cb)
       })
 
+      it('should escape token values used from a function format', function (done) {
+        var nel = String.fromCharCode(0x85)
+
+        var cb = after(2, function (err, res, line) {
+          if (err) return done(err)
+          assert.strictEqual(line.indexOf(nel), -1)
+          assert.strictEqual(line, 'foo\\u0085bar')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          cb(null, null, line)
+        })
+
+        function format (tokens, req, res) {
+          return tokens.req(req, res, 'x-test')
+        }
+
+        request(createServer(format, { stream: stream }))
+          .get('/')
+          .set('x-test', 'foo' + nel + 'bar')
+          .expect(200, cb)
+      })
+
       it('should reject format as bool', function () {
         assert.throws(createServer.bind(null, true), /argument format/)
       })
@@ -328,6 +352,26 @@ describe('morgan()', function () {
           .set('Set-Cookie', ['foo=bar', 'fizz=buzz'])
           .expect(200, cb)
       })
+
+      it('should escape control characters in header values', function (done) {
+        var nel = String.fromCharCode(0x85)
+
+        var cb = after(2, function (err, res, line) {
+          if (err) return done(err)
+          assert.strictEqual(line.indexOf(nel), -1)
+          assert.strictEqual(line, 'foo\\u0085bar')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          cb(null, null, line)
+        })
+
+        request(createServer(':req[x-test]', { stream: stream }))
+          .get('/')
+          .set('x-test', 'foo' + nel + 'bar')
+          .expect(200, cb)
+      })
     })
 
     describe(':res', function () {
@@ -550,6 +594,70 @@ describe('morgan()', function () {
         request(createServer(':remote-user', { stream: stream }))
           .get('/')
           .set('Authorization', 'Basic dGo6')
+          .expect(200, cb)
+      })
+
+      it('should escape Unicode line separators', function (done) {
+        var cb = after(2, function (err, res, line) {
+          if (err) return done(err)
+          assert.strictEqual(line.indexOf('\u0085'), -1)
+          assert.strictEqual(line.indexOf('\u2028'), -1)
+          assert.strictEqual(line.indexOf('\u2029'), -1)
+          assert.strictEqual(line, 'alice\\u0085next\\u2028line\\u2029end')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          cb(null, null, line)
+        })
+
+        // 'alice\u0085next\u2028line\u2029end:x' in Base64
+        request(createServer(':remote-user', { stream: stream }))
+          .get('/')
+          .set('Authorization', 'Basic YWxpY2XChW5leHTigKhsaW5l4oCpZW5kOng=')
+          .expect(200, cb)
+      })
+
+      it('should not forge additional log lines via CRLF injection', function (done) {
+        var lines = []
+        var cb = after(2, function (err, res) {
+          if (err) return done(err)
+
+          // must produce exactly one log line, not two
+          assert.strictEqual(lines.length, 1)
+          assert.strictEqual(lines[0].indexOf('\r'), -1)
+          assert.strictEqual(lines[0].indexOf('\n'), -1)
+          assert.strictEqual(lines[0], '- [01/Jan/1970 00-00-00 +0000] "GET /injected HTTP/1.1" 200 - "-" "curl/8.14.1"\\r\\n192.0.2.0 - - ')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          lines.push(line)
+          if (lines.length === 1) cb(null, null)
+        })
+
+        // Full log forging payload from advisory PoC
+        request(createServer(':remote-user', { stream: stream }))
+          .get('/')
+          .set('Authorization', 'Basic LSBbMDEvSmFuLzE5NzAgMDAtMDAtMDAgKzAwMDBdICJHRVQgL2luamVjdGVkIEhUVFAvMS4xIiAyMDAgLSAiLSIgImN1cmwvOC4xNC4xIg0KMTkyLjAuMi4wIC0gLSA6eA==')
+          .expect(200, cb)
+      })
+
+      it('should escape backslashes', function (done) {
+        var cb = after(2, function (err, res, line) {
+          if (err) return done(err)
+          assert.strictEqual(line, 'evil\\\\nuser')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          cb(null, null, line)
+        })
+
+        // 'evil\nuser:x' (literal backslash) in Base64
+        request(createServer(':remote-user', { stream: stream }))
+          .get('/')
+          .set('Authorization', 'Basic ZXZpbFxudXNlcjp4')
           .expect(200, cb)
       })
 
@@ -1010,6 +1118,30 @@ describe('morgan()', function () {
           .expect(200, cb)
       })
 
+      it('should escape Unicode line separators', function (done) {
+        var cb = after(2, function (err, res, line) {
+          if (err) return done(err)
+          assert.strictEqual(line.indexOf('\u0085'), -1)
+          assert.strictEqual(line.indexOf('\u2028'), -1)
+          assert.strictEqual(line.indexOf('\u2029'), -1)
+          assert.strictEqual(line, '/foo\\u0085bar\\u2028baz\\u2029end')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          cb(null, null, line)
+        })
+
+        var server = createServer(':url', { stream: stream }, function (req, res, next) {
+          req.originalUrl = '/foo\u0085bar\u2028baz\u2029end'
+          next()
+        })
+
+        request(server)
+          .get('/')
+          .expect(200, cb)
+      })
+
       it('should not exist for aborted request', function (done) {
         var stream = createLineStream(function (line) {
           assert.strictEqual(line, '-')
@@ -1146,6 +1278,32 @@ describe('morgan()', function () {
           .set('Authorization', 'Basic dGo6')
           .set('Referer', 'http://localhost/')
           .set('User-Agent', 'my-ua')
+          .expect(200, cb)
+      })
+
+      it('should escape line separators in request fields', function (done) {
+        var nel = String.fromCharCode(0x85)
+        var lines = []
+
+        var cb = after(2, function (err, res) {
+          if (err) return done(err)
+          assert.strictEqual(lines.length, 1)
+          assert.strictEqual(lines[0].indexOf(nel), -1)
+          var masked = lines[0].replace(/\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2} \+0000/, '_timestamp_')
+          assert.strictEqual(masked, res.text + ' - tj [_timestamp_] "GET / HTTP/1.1" 200 - "http://localhost/\\u0085forged" "my-ua\\u0085forged"')
+          done()
+        })
+
+        var stream = createLineStream(function (line) {
+          lines.push(line)
+          if (lines.length === 1) cb(null, null)
+        })
+
+        request(createServer('combined', { stream: stream }))
+          .get('/')
+          .set('Authorization', 'Basic dGo6')
+          .set('Referer', 'http://localhost/' + nel + 'forged')
+          .set('User-Agent', 'my-ua' + nel + 'forged')
           .expect(200, cb)
       })
     })

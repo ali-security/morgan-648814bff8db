@@ -48,6 +48,33 @@ var CLF_MONTH = [
 var DEFAULT_BUFFER_DURATION = 1000
 
 /**
+ * Escape control characters and backslashes so a value is safe for
+ * line-oriented logs.
+ * @private
+ *
+ * @param {*} value Value to escape.
+ * @returns {string|undefined} Escaped string, or undefined for null/undefined.
+ */
+
+function escapeLogField (value) {
+  if (value == null) return undefined
+
+  // eslint-disable-next-line no-control-regex
+  return String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\\]/g, function (ch) {
+    switch (ch) {
+      case '\\': return '\\\\'
+      case '\b': return '\\b'
+      case '\f': return '\\f'
+      case '\n': return '\\n'
+      case '\r': return '\\r'
+      case '\t': return '\\t'
+      default:
+        return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4)
+    }
+  })
+}
+
+/**
  * Create a logger middleware.
  *
  * @public
@@ -308,7 +335,7 @@ morgan.token('remote-user', function getRemoteUserToken (req) {
   // parse basic credentials
   var credentials = auth(req)
 
-  // return username
+  // return username (escaping is applied by the token() wrapper)
   return credentials
     ? credentials.name
     : undefined
@@ -539,6 +566,11 @@ function recordStartTime () {
  */
 
 function token (name, fn) {
-  morgan[name] = fn
+  // wrap the token so its string output is always escaped for line-oriented
+  // logs, regardless of whether the format is a string or a function
+  morgan[name] = function tokenValue () {
+    var value = fn.apply(this, arguments)
+    return typeof value === 'string' ? escapeLogField(value) : value
+  }
   return this
 }
